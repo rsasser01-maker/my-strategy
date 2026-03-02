@@ -108,28 +108,88 @@ namespace NinjaTrader.NinjaScript.Strategies
 			//VendorLicense("EminiBuySellZones","ConwayControlledRiskEntryTradingSystem","http://conwaymarketdnadaytrading.com","jconway712@aol.com");
 		}
 
+		// ===== Helper: Is today in the holiday blackout window? =====
+		private bool IsHolidayBlackout()
+		{
+			if (!UseHolidayFilter)
+				return false;
+
+			DateTime today = Time[0].Date;
+			int month = today.Month;
+			int day   = today.Day;
+
+			// --- Thanksgiving week block ---
+			if (BlockThanksgivingWeek)
+			{
+				// Thanksgiving is the 4th Thursday of November.
+				// We block the entire Mon-Fri week that contains it.
+				if (month == 11)
+				{
+					// Find the 4th Thursday of November this year
+					DateTime nov1       = new DateTime(today.Year, 11, 1);
+					int      thuOffset  = ((int)DayOfWeek.Thursday - (int)nov1.DayOfWeek + 7) % 7;
+					DateTime firstThur  = nov1.AddDays(thuOffset);
+					DateTime thanksgiv  = firstThur.AddDays(21); // 4th Thursday
+					DateTime weekMon    = thanksgiv.AddDays(-(int)thanksgiv.DayOfWeek + 1);
+					DateTime weekFri    = weekMon.AddDays(4);
+					if (today >= weekMon && today <= weekFri)
+						return true;
+				}
+			}
+
+			// --- Holiday / rollover block (default Dec 15 - Jan 2) ---
+			if (BlockHolidayRollover)
+			{
+				// Same year: start month/day through Dec 31
+				if (month == HolidayBlockStartMonth && day >= HolidayBlockStartDay)
+					return true;
+				// Spill into next year: Jan 1 through end month/day
+				if (month == HolidayBlockEndMonth && day <= HolidayBlockEndDay)
+					return true;
+				// Handle case where start and end are same month
+				if (HolidayBlockStartMonth == HolidayBlockEndMonth
+					&& month == HolidayBlockStartMonth
+					&& day >= HolidayBlockStartDay && day <= HolidayBlockEndDay)
+					return true;
+			}
+
+			return false;
+		}
+
+		// ===== Helper: Is current volume sufficient? =====
+		private bool IsVolumeOK()
+		{
+			if (!UseVolumeFilter)
+				return true;
+
+			if (ticksPerSecond == null)
+				return true;
+
+			return ticksPerSecond[0] >= MinTicksPerSecond;
+		}
+
 		protected override void OnStateChange()
 		{
 			if (State == State.SetDefaults)
 			{
-				Description									= @"Enter the description for your new custom Strategy here.";
-				Name										= "AutomaticConwayChaosStrategyApexUnlocked";
-				Calculate									= Calculate.OnBarClose;
-				EntriesPerDirection							= 1;
-				EntryHandling								= EntryHandling.AllEntries;
-				IsExitOnSessionCloseStrategy				= true;
-				ExitOnSessionCloseSeconds					= 30;
-				IsFillLimitOnTouch							= false;
-				MaximumBarsLookBack							= MaximumBarsLookBack.TwoHundredFiftySix;
-				OrderFillResolution							= OrderFillResolution.Standard;
-				Slippage									= 0;
-				StartBehavior								= StartBehavior.WaitUntilFlat;
-				TimeInForce									= TimeInForce.Gtc;
-				TraceOrders									= false;
-				RealtimeErrorHandling						= RealtimeErrorHandling.IgnoreAllErrors;
-				StopTargetHandling							= StopTargetHandling.PerEntryExecution;
-				BarsRequiredToTrade							= 20;
-				IsUnmanaged									= true;
+				Description							= @"Enter the description for your new custom Strategy here.";
+				Name							= "AutomaticConwayChaosStrategyApexUnlocked";
+				Calculate						= Calculate.OnBarClose;
+				EntriesPerDirection				= 1;
+				EntryHandling					= EntryHandling.AllEntries;
+				IsExitOnSessionCloseStrategy		= true;
+				ExitOnSessionCloseSeconds			= 30;
+				IsFillLimitOnTouch				= false;
+				MaximumBarsLookBack				= MaximumBarsLookBack.TwoHundredFiftySix;
+				OrderFillResolution				= OrderFillResolution.Standard;
+				Slippage						= 0;
+				StartBehavior					= StartBehavior.WaitUntilFlat;
+				TimeInForce						= TimeInForce.Gtc;
+				TraceOrders						= false;
+				RealtimeErrorHandling				= RealtimeErrorHandling.IgnoreAllErrors;
+				StopTargetHandling				= StopTargetHandling.PerEntryExecution;
+				BarsRequiredToTrade				= 20;
+				IsUnmanaged						= true;
 				IsInstantiatedOnEachOptimizationIteration	= true;
 
 				StopTicks = 30;
@@ -181,6 +241,19 @@ namespace NinjaTrader.NinjaScript.Strategies
 				StatsFontSize = 14;
 				StatsFontBrush = Brushes.White;
 				StatsBackgroundBrush = Brushes.Black;
+
+				// ===== Seasonal Filters =====
+				UseHolidayFilter         = true;
+				BlockThanksgivingWeek    = true;
+				BlockHolidayRollover     = true;
+				HolidayBlockStartMonth   = 12;
+				HolidayBlockStartDay     = 15;
+				HolidayBlockEndMonth     = 1;
+				HolidayBlockEndDay       = 2;
+
+				// ===== Volume Filter =====
+				UseVolumeFilter    = true;
+				MinTicksPerSecond  = 50;
 			}
 			else if (State == State.Configure)
 			{
@@ -236,6 +309,23 @@ namespace NinjaTrader.NinjaScript.Strategies
 					// Create Trigger Lines at the same prices where the old OCO stop orders used to be placed
 					if (pastTime && firstBar)
 					{
+						// ===== SEASONAL FILTER CHECK =====
+						if (IsHolidayBlackout())
+						{
+							Draw.TextFixed(this, "FilterMsg", "TRADING BLOCKED: Holiday / Rollover Period", TextPosition.TopRight, Brushes.Orange, new SimpleFont("Arial", 12), Brushes.Black, Brushes.Black, 10);
+							return;
+						}
+
+						// ===== VOLUME FILTER CHECK =====
+						if (!IsVolumeOK())
+						{
+							Draw.TextFixed(this, "FilterMsg", "TRADING BLOCKED: Volume Too Low (" + (ticksPerSecond != null ? ticksPerSecond[0].ToString("F0") : "?") + " ticks/sec, min=" + MinTicksPerSecond + ")", TextPosition.TopRight, Brushes.Yellow, new SimpleFont("Arial", 12), Brushes.Black, Brushes.Black, 10);
+							return;
+						}
+
+						// Clear any filter message if we are trading today
+						Draw.TextFixed(this, "FilterMsg", "", TextPosition.TopRight, Brushes.Transparent, new SimpleFont("Arial", 12), Brushes.Transparent, Brushes.Transparent, 10);
+
 						triggerLongPrice  = barHigh + AboveBelowTicks * TickSize;
 						triggerShortPrice = barLow  - AboveBelowTicks * TickSize;
 
@@ -375,7 +465,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 								Draw.TextFixed(this, "text", stop.ToString(), TextPosition.BottomRight);
 								if (stop != 0)
 									SendOrder(OrderAction.Sell, OrderType.StopMarket, Position.Quantity, 0, stop, strLongStop);
-							}
+						}
 						}
 						else if (Position.MarketPosition == MarketPosition.Short)
 						{
@@ -399,20 +489,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 
 								if (stop != double.MaxValue)
 									SendOrder(OrderAction.BuyToCover, OrderType.StopMarket, Position.Quantity, 0, stop, strShortStop);
-							}
-							else if (ProfitTargetTrade2)
-							{
-								double stop = double.MaxValue;
-								if (shortHW >= ProfitTarget3Trade2 && ProfitTarget3Trade2 > 0)
-									stop = Position.AveragePrice - ProfitTarget3StopTicksTrade2 * TickSize;
-								else if (shortHW >= ProfitTarget2Trade2 && ProfitTarget2Trade2 > 0)
-									stop = Position.AveragePrice - ProfitTarget2StopTicksTrade2 * TickSize;
-								else if (shortHW >= ProfitTarget1Trade2 && ProfitTarget1Trade2 > 0)
-									stop = Position.AveragePrice - ProfitTarget1StopTicksTrade2 * TickSize;
-
-								if (stop != double.MaxValue)
-									SendOrder(OrderAction.BuyToCover, OrderType.StopMarket, Position.Quantity, 0, stop, strShortStop);
-							}
+						}
 						}
 					}
 
@@ -656,647 +733,529 @@ namespace NinjaTrader.NinjaScript.Strategies
 					}
 				}
 
-				var text = string.Format("{0}: {1}, {2}, {3}", Time[0], e.Name, exitPrice, entryPrice);
-				Print(text);
-
-				if (Trade2Reversal && e.Name == strShortStop && exitPrice > entryPrice)
-				{
-					if (!CancelTrade2 || Time[0].Subtract(entryTime).TotalMinutes < CancelTrade2Minutes)
-					{
-						if (MarketOrderReversal)
-							SendOrder(OrderAction.Buy, OrderType.Market, Trade2Contracts, 0, 0, strLong2);
-						else
-						{
-							trade2XBar = CurrentBars[0];
-							var stopPrice = exitPrice + StopOrderReversalEntry_ticks * TickSize;
-							if (StopLine)
-								Draw.Line(this, trade2XBar.ToString(), IsAutoScale, 0, stopPrice, -1, stopPrice, StopLineStroke.Brush, StopLineStroke.DashStyleHelper, (int)StopLineStroke.Width);
-							SendOrder(OrderAction.Buy, OrderType.StopMarket, Trade2Contracts, 0, stopPrice, strLong2);
-						}
-					}
-				}
+				UpdatePanel();
 			}
 
-			UpdatePanel();
-		}
-
-		// =========================
-		// STATS PANEL (from Chaos)
-		// =========================
-
-		private string FormatMoney(double value, bool showSign)
-		{
-			string sign = value < 0 ? "-" : "";
-			double abs = Math.Abs(value);
-			string body = string.Format("{0:n0}", abs);
-			return "$" + sign + body;
-		}
-
-		private void UpdatePanel()
-		{
-			try
+			private Chart chartWindow;
+			private bool buttonAdded = false;
+			private void AddButtonToToolbar()
 			{
-				if (State != State.Realtime && State != State.Historical)
+				if (ChartControl == null || buttonAdded)
 					return;
 
-				// Daily PnL from starting equity snapshot
-				if (sodEquity != 0)
-					dailyPnL = Account.Get(AccountItem.CashValue, Currency.UsDollar) - sodEquity;
-
-				int count = (SystemPerformance == null || SystemPerformance.AllTrades == null) ? 0 : SystemPerformance.AllTrades.Count;
-
-				if (count != statsCachedTradesCount)
-				{
-					statsCachedTradesCount = count;
-
-					int wins = 0, losses = 0;
-					double grossProfit = 0.0;
-					double grossLossAbs = 0.0;
-					double net = 0.0;
-
-					double largestWin = 0.0;
-					double largestLoss = 0.0; // negative
-					double equity = 0.0;
-					double peakEquity = 0.0;
-					double maxDdPositive = 0.0;
-
-					if (count > 0)
-					{
-						for (int i = 0; i < count; i++)
-						{
-							double p = SystemPerformance.AllTrades[i].ProfitCurrency;
-
-							net += p;
-							equity += p;
-
-							if (p > 0)
-							{
-								wins++;
-								grossProfit += p;
-								if (p > largestWin) largestWin = p;
-							}
-							else if (p < 0)
-							{
-								losses++;
-								grossLossAbs += -p;
-								if (p < largestLoss) largestLoss = p;
-							}
-
-							if (equity > peakEquity)
-								peakEquity = equity;
-
-							double dd = peakEquity - equity; // positive
-							if (dd > maxDdPositive)
-								maxDdPositive = dd;
-						}
-					}
-
-					double winRate = (count > 0) ? (100.0 * wins / count) : 0.0;
-					double profitFactor = (grossLossAbs > 0.0) ? (grossProfit / grossLossAbs) : (grossProfit > 0.0 ? double.PositiveInfinity : 0.0);
-					double maxDrawDown = -maxDdPositive;
-
-					var sb = new StringBuilder();
-					sb.AppendLine(string.Format("Trades:{0}", count));
-					sb.AppendLine(string.Format("W:{0} L:{1}", wins, losses));
-					sb.AppendLine(string.Format("Win Rate: {0:0}%", winRate));
-					sb.AppendLine(string.Format("Profit Factor: {0:0.00}", profitFactor));
-					sb.AppendLine(string.Format("Net P&L: {0}", FormatMoney(net, true)));
-					sb.AppendLine(string.Format("Largest Win: {0}", FormatMoney(largestWin, true)));
-					sb.AppendLine(string.Format("Largest Loss: {0}", FormatMoney(largestLoss, true)));
-					sb.AppendLine(string.Format("Max Draw Down: {0}", FormatMoney(maxDrawDown, true)));
-					sb.AppendLine("");
-
-					statsCachedText = sb.ToString();
-				}
-
-				Draw.TextFixed(
-					this,
-					"StatsPanel",
-					statsCachedText,
-					TextPosition.TopLeft,
-					StatsFontBrush,
-					new SimpleFont("Arial", StatsFontSize),
-					StatsBackgroundBrush,
-					StatsBackgroundBrush,
-					20
-				);
-			}
-			catch { }
-		}
-
-		public void SendOrder(OrderAction action, OrderType type, int quantity, double limitPrice, double stopPrice, string name, string oco = "")
-		{
-			if (CurrentBar < BarsRequiredToTrade)
-				return;
-
-			double limit = Instrument.MasterInstrument.RoundToTickSize(limitPrice);
-			double stop = Instrument.MasterInstrument.RoundToTickSize(stopPrice);
-
-			lock (orderLock)
-			{
-				if (!Orders.ContainsKey(name))
-					Orders.Add(name, null);
-
-				bool forceSubmit = IsWorking(name) && Orders[name] != null && Orders[name].OrderType != type;
-				if (forceSubmit)
-					CancelOrder(name);
-
-				if (!IsWorking(name) || forceSubmit)
-					SubmitOrderUnmanaged(1, action, type, quantity, limit, stop, oco, name);
-				else if (Orders[name] != null && (Orders[name].StopPrice != stop || Orders[name].LimitPrice != limit || Orders[name].Quantity != quantity))
-					ChangeOrder(Orders[name], quantity, limit, stop);
-			}
-		}
-
-		public void CancelOrder(string name)
-		{
-			if (IsWorking(name))
-				CancelOrder(Orders[name]);
-		}
-
-		public bool IsWorking(string name)
-		{
-			if (!Orders.ContainsKey(name))
-				return false;
-
-			Order o = Orders[name];
-			return IsWorking(o);
-		}
-
-		public bool IsWorking(Order o)
-		{
-			if (o == null || o.OrderState == OrderState.Cancelled || o.OrderState == OrderState.Filled || o.OrderState == OrderState.Rejected)
-				return false;
-			return true;
-		}
-
-		private Chart chartWindow;
-		private bool buttonAdded = false;
-		private void AddButtonToToolbar()
-		{
-			if (ChartControl == null || buttonAdded)
-				return;
-
-			ChartControl.Dispatcher.InvokeAsync((Action)(() =>
-			{
-				chartWindow = Window.GetWindow(ChartControl.Parent) as Chart;
-				if (chartWindow == null)
-					return;
-
-				Style s = new Style();
-				s.TargetType = typeof(System.Windows.Controls.Button);
-				s.Setters.Add(new Setter(System.Windows.Controls.Button.BackgroundProperty, Brushes.Cyan));
-				s.Setters.Add(new Setter(System.Windows.Controls.Button.ForegroundProperty, closeBrush));
-				s.Setters.Add(new Setter(System.Windows.Controls.Button.ContentProperty, "StrategyClose"));
-
-				btnClose = new System.Windows.Controls.Button();
-				btnClose.Style = s;
-				btnClose.Click += btnClose_Click;
-
-				s = new Style();
-				s.TargetType = typeof(System.Windows.Controls.Button);
-				s.Setters.Add(new Setter(System.Windows.Controls.Button.BackgroundProperty, targetBEBrush));
-				s.Setters.Add(new Setter(System.Windows.Controls.Button.ForegroundProperty, closeBrush));
-				s.Setters.Add(new Setter(System.Windows.Controls.Button.ContentProperty, "TargetBE"));
-
-				btnBreakEven = new System.Windows.Controls.Button();
-				btnBreakEven.Style = s;
-				btnBreakEven.Click += btnBreakEven_Click;
-
-				s = new Style();
-				s.TargetType = typeof(System.Windows.Controls.Button);
-				s.Setters.Add(new Setter(System.Windows.Controls.Button.BackgroundProperty, stopBEBrush));
-				s.Setters.Add(new Setter(System.Windows.Controls.Button.ForegroundProperty, closeBrush));
-				s.Setters.Add(new Setter(System.Windows.Controls.Button.ContentProperty, "StopBE"));
-
-				btnStopBE = new System.Windows.Controls.Button();
-				btnStopBE.Style = s;
-				btnStopBE.Click += btnStopBE_Click;
-
-				chartWindow.MainMenu.Add(btnClose);
-				chartWindow.MainMenu.Add(btnBreakEven);
-				chartWindow.MainMenu.Add(btnStopBE);
-
-			}));
-
-			buttonAdded = true;
-		}
-
-		private void RemoveButtonFromToolbar()
-		{
-			if (chartWindow != null)
-			{
 				ChartControl.Dispatcher.InvokeAsync((Action)(() =>
 				{
-					if (btnClose != null)
-						chartWindow.MainMenu.Remove(btnClose);
-					if (btnLong != null)
-						chartWindow.MainMenu.Remove(btnLong);
-					if (btnShort != null)
-						chartWindow.MainMenu.Remove(btnShort);
-					if (btnLongShort != null)
-						chartWindow.MainMenu.Remove(btnLongShort);
-					if (btnChopFilter != null)
-						chartWindow.MainMenu.Remove(btnChopFilter);
-					if (btnBreakEven != null)
-						chartWindow.MainMenu.Remove(btnBreakEven);
-					if (btnChopBlock != null)
-						chartWindow.MainMenu.Remove(btnChopBlock);
-					if (btnEMAFilter != null)
-						chartWindow.MainMenu.Remove(btnEMAFilter);
-					if (btnStopBE != null)
-						chartWindow.MainMenu.Remove(btnStopBE);
-					if (btnRequireEMA != null)
-						chartWindow.MainMenu.Remove(btnRequireEMA);
+					chartWindow = Window.GetWindow(ChartControl.Parent) as Chart;
+					if (chartWindow == null)
+						return;
+
+					Style s = new Style();
+					s.TargetType = typeof(System.Windows.Controls.Button);
+					s.Setters.Add(new Setter(System.Windows.Controls.Button.BackgroundProperty, Brushes.Cyan));
+					s.Setters.Add(new Setter(System.Windows.Controls.Button.ForegroundProperty, closeBrush));
+					s.Setters.Add(new Setter(System.Windows.Controls.Button.ContentProperty, "StrategyClose"));
+
+					btnClose = new System.Windows.Controls.Button();
+					btnClose.Style = s;
+					btnClose.Click += btnClose_Click;
+
+					s = new Style();
+					s.TargetType = typeof(System.Windows.Controls.Button);
+					s.Setters.Add(new Setter(System.Windows.Controls.Button.BackgroundProperty, targetBEBrush));
+					s.Setters.Add(new Setter(System.Windows.Controls.Button.ForegroundProperty, closeBrush));
+					s.Setters.Add(new Setter(System.Windows.Controls.Button.ContentProperty, "TargetBE"));
+
+					btnBreakEven = new System.Windows.Controls.Button();
+					btnBreakEven.Style = s;
+					btnBreakEven.Click += btnBreakEven_Click;
+
+					s = new Style();
+					s.TargetType = typeof(System.Windows.Controls.Button);
+					s.Setters.Add(new Setter(System.Windows.Controls.Button.BackgroundProperty, stopBEBrush));
+					s.Setters.Add(new Setter(System.Windows.Controls.Button.ForegroundProperty, closeBrush));
+					s.Setters.Add(new Setter(System.Windows.Controls.Button.ContentProperty, "StopBE"));
+
+					btnStopBE = new System.Windows.Controls.Button();
+					btnStopBE.Style = s;
+					btnStopBE.Click += btnStopBE_Click;
+
+					chartWindow.MainMenu.Add(btnClose);
+					chartWindow.MainMenu.Add(btnBreakEven);
+					chartWindow.MainMenu.Add(btnStopBE);
+
 				}));
-			}
-		}
 
-		private void btnStopBE_Click(object sender, RoutedEventArgs e)
-		{
-			if (Position.MarketPosition == MarketPosition.Long)
-			{
-				SendOrder(OrderAction.Sell, OrderType.StopMarket, Position.Quantity, 0, Position.AveragePrice, strLongStop);
+				buttonAdded = true;
 			}
 
-			if (Position.MarketPosition == MarketPosition.Short)
+			private void RemoveButtonFromToolbar()
 			{
-				SendOrder(OrderAction.BuyToCover, OrderType.StopMarket, Position.Quantity, 0, Position.AveragePrice, strShortStop);
-			}
-		}
-
-		private void btnClose_Click(object sender, RoutedEventArgs e)
-		{
-			if (Position.MarketPosition == MarketPosition.Long)
-				SendOrder(OrderAction.Sell, OrderType.Market, Position.Quantity, 0, 0, strLongExit);
-			if (Position.MarketPosition == MarketPosition.Short)
-				SendOrder(OrderAction.BuyToCover, OrderType.Market, Position.Quantity, 0, 0, strShortExit);
-		}
-
-		private void btnBreakEven_Click(object sender, RoutedEventArgs e)
-		{
-			if (Position.MarketPosition == MarketPosition.Long)
-			{
-				SendOrder(OrderAction.Sell, OrderType.Limit, Position.Quantity, Position.AveragePrice, 0, strLongTarget1);
-			}
-
-			if (Position.MarketPosition == MarketPosition.Short)
-			{
-				SendOrder(OrderAction.BuyToCover, OrderType.Limit, Position.Quantity, Position.AveragePrice, 0, strShortTarget1);
-			}
-		}
-
-		private void Say(string speechstring)
-		{
-			if (!AudioAlert || State == State.Historical || _speaker == null)
-				return;
-
-			_speaker.SpeakAsync(speechstring);
-		}
-
-		#region Properties
-
-		[NinjaScriptProperty]
-		[Display(Name = "StopTicks", Order = 6, GroupName = "One-Bar Breakout Trade #1")]
-		public int StopTicks
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(Name = "Trade #1 Contracts", Order = 7, GroupName = "One-Bar Breakout Trade #1")]
-		public int Target1Contracts
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(Name = "Target1Ticks", Order = 8, GroupName = "One-Bar Breakout Trade #1")]
-		public int Target1Ticks
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(Name = "Profit Target", Order = 12, GroupName = "One-Bar Breakout Trade #1")]
-		public bool StopGoesBreakEven
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(Name = "ProfitTarget1", Order = 13, GroupName = "One-Bar Breakout Trade #1")]
-		public int ProfitTarget1
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(Name = "Profit Target1 Stop_ticks", Order = 14, GroupName = "One-Bar Breakout Trade #1")]
-		public int StopGoesBreakEvenPlusMinusTicks1
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(Name = "ProfitTarget2", Order = 15, GroupName = "One-Bar Breakout Trade #1")]
-		public int ProfitTarget2
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(Name = "Profit Target2 Stop_ticks", Order = 16, GroupName = "One-Bar Breakout Trade #1")]
-		public int StopGoesBreakEvenPlusMinusTicks2
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(Name = "ProfitTarget3", Order = 17, GroupName = "One-Bar Breakout Trade #1")]
-		public int ProfitTarget3
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(Name = "Profit Target3 Stop_ticks", Order = 18, GroupName = "One-Bar Breakout Trade #1")]
-		public int StopGoesBreakEvenPlusMinusTicks3
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "AboveBelow_Ticks", Order = 3, GroupName = "One-Bar Breakout Trade #1")]
-		public int AboveBelowTicks
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Plot Trigger Lines", Order = 3, GroupName = "One-Bar Breakout Trade #1")]
-		public bool PlotTriggerLines
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "TriggerLineStroke", Order = 3, GroupName = "One-Bar Breakout Trade #1")]
-		public Stroke TriggerLineStroke
-		{ get; set; }
-
-		private TimeSpan priceBarTime = new TimeSpan(9, 29, 50);
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "PriceBarTime", Order = 4, GroupName = "One-Bar Breakout Trade #1")]
-		public TimeSpan PriceBarTime
-		{
-			get { return priceBarTime; }
-			set { priceBarTime = value; }
-		}
-
-		[Browsable(false)]
-		public string PriceBarTimeS
-		{
-			get { return priceBarTime.ToString(); }
-			set { priceBarTime = TimeSpan.Parse(value); }
-		}
-
-		// ===== Trade #2 =====
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Trade #2 Reversal", Order = 0, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public bool Trade2Reversal
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Trade #2 Stop", Order = 8, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public int Trade2Stop
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Trade #2 Contracts", Order = 9, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public int Trade2Contracts
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Trade #2 Target", Order = 10, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public int Trade2Target
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target Trade #2", Order = 11, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public bool ProfitTargetTrade2
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target1 Trade #2", Order = 12, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public int ProfitTarget1Trade2
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target1 Stop Ticks Trade #2", Order = 13, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public int ProfitTarget1StopTicksTrade2
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target2 Trade #2", Order = 14, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public int ProfitTarget2Trade2
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target2 Stop Ticks Trade #2", Order = 15, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public int ProfitTarget2StopTicksTrade2
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target3 Trade #2", Order = 16, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public int ProfitTarget3Trade2
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target3 Stop Ticks Trade #2", Order = 17, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public int ProfitTarget3StopTicksTrade2
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Market Order Reversal", Order = 18, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public bool MarketOrderReversal
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Stop Order Reversal", Order = 19, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public bool StopOrderReversal
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "StopOrderReversalEntry_ticks", Order = 20, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public int StopOrderReversalEntry_ticks
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "CancelStopOrderAfter_Bars", Order = 21, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public int CancelStopOrderAfter_Bars
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Cancel_Trade#2 if Trade#1 is protracted", Order = 22, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public bool CancelTrade2
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Cancel_Trade#2_Minutes", Order = 23, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public int CancelTrade2Minutes
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "AudioAlert", Order = 24, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public bool AudioAlert
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "StopLine", Order = 25, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public bool StopLine
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "StopLineStroke", Order = 26, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
-		public Stroke StopLineStroke
-		{ get; set; }
-
-		#region Stats Panel
-
-		[NinjaScriptProperty]
-		[Display(Name = "Stats Font Size", Order = 1, GroupName = "Stats Panel")]
-		public int StatsFontSize
-		{ get; set; }
-
-		[XmlIgnore]
-		[Display(Name = "Stats Font Color", Order = 2, GroupName = "Stats Panel")]
-		public Brush StatsFontBrush
-		{
-			get { return statsFontBrush; }
-			set
-			{
-				statsFontBrush = value;
-				if (statsFontBrush != null)
+				if (chartWindow != null)
 				{
-					if (statsFontBrush.IsFrozen)
-						statsFontBrush = statsFontBrush.Clone();
-					statsFontBrush.Freeze();
+					ChartControl.Dispatcher.InvokeAsync((Action)(() =>
+					{
+						if (btnClose != null)
+							chartWindow.MainMenu.Remove(btnClose);
+						if (btnLong != null)
+							chartWindow.MainMenu.Remove(btnLong);
+						if (btnShort != null)
+							chartWindow.MainMenu.Remove(btnShort);
+						if (btnLongShort != null)
+							chartWindow.MainMenu.Remove(btnLongShort);
+						if (btnChopFilter != null)
+							chartWindow.MainMenu.Remove(btnChopFilter);
+						if (btnBreakEven != null)
+							chartWindow.MainMenu.Remove(btnBreakEven);
+						if (btnChopBlock != null)
+							chartWindow.MainMenu.Remove(btnChopBlock);
+						if (btnEMAFilter != null)
+							chartWindow.MainMenu.Remove(btnEMAFilter);
+						if (btnStopBE != null)
+							chartWindow.MainMenu.Remove(btnStopBE);
+						if (btnRequireEMA != null)
+							chartWindow.MainMenu.Remove(btnRequireEMA);
+					}));
 				}
 			}
-		}
 
-		[Browsable(false)]
-		public string StatsFontBrushS
-		{
-			get { return Serialize.BrushToString(StatsFontBrush); }
-			set { StatsFontBrush = Serialize.StringToBrush(value); }
-		}
-
-		[XmlIgnore]
-		[Display(Name = "Stats Background Color", Order = 3, GroupName = "Stats Panel")]
-		public Brush StatsBackgroundBrush
-		{
-			get { return statsBackgroundBrush; }
-			set
+			private void btnStopBE_Click(object sender, RoutedEventArgs e)
 			{
-				statsBackgroundBrush = value;
-				if (statsBackgroundBrush != null)
+				if (Position.MarketPosition == MarketPosition.Long)
 				{
-					if (statsBackgroundBrush.IsFrozen)
-						statsBackgroundBrush = statsBackgroundBrush.Clone();
-					statsBackgroundBrush.Freeze();
+					SendOrder(OrderAction.Sell, OrderType.StopMarket, Position.Quantity, 0, Position.AveragePrice, strLongStop);
+				}
+
+				if (Position.MarketPosition == MarketPosition.Short)
+				{
+					SendOrder(OrderAction.BuyToCover, OrderType.StopMarket, Position.Quantity, 0, Position.AveragePrice, strShortStop);
 				}
 			}
-		}
 
-		[Browsable(false)]
-		public string StatsBackgroundBrushS
-		{
-			get { return Serialize.BrushToString(StatsBackgroundBrush); }
-			set { StatsBackgroundBrush = Serialize.StringToBrush(value); }
-		}
+			private void btnClose_Click(object sender, RoutedEventArgs e)
+			{
+				if (Position.MarketPosition == MarketPosition.Long)
+					SendOrder(OrderAction.Sell, OrderType.Market, Position.Quantity, 0, 0, strLongExit);
+				if (Position.MarketPosition == MarketPosition.Short)
+					SendOrder(OrderAction.BuyToCover, OrderType.Market, Position.Quantity, 0, 0, strShortExit);
+			}
+
+			private void btnBreakEven_Click(object sender, RoutedEventArgs e)
+			{
+				if (Position.MarketPosition == MarketPosition.Long)
+				{
+					SendOrder(OrderAction.Sell, OrderType.Limit, Position.Quantity, Position.AveragePrice, 0, strLongTarget1);
+				}
+
+				if (Position.MarketPosition == MarketPosition.Short)
+				{
+					SendOrder(OrderAction.BuyToCover, OrderType.Limit, Position.Quantity, Position.AveragePrice, 0, strShortTarget1);
+				}
+			}
+
+			private void Say(string speechstring)
+			{
+				if (!AudioAlert || State == State.Historical || _speaker == null)
+					return;
+
+				_speaker.SpeakAsync(speechstring);
+			}
+
+			#region Properties
+
+			[NinjaScriptProperty]
+			[Display(Name = "StopTicks", Order = 6, GroupName = "One-Bar Breakout Trade #1")]
+			public int StopTicks
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "Trade #1 Contracts", Order = 7, GroupName = "One-Bar Breakout Trade #1")]
+			public int Target1Contracts
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "Target1Ticks", Order = 8, GroupName = "One-Bar Breakout Trade #1")]
+			public int Target1Ticks
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "Profit Target", Order = 12, GroupName = "One-Bar Breakout Trade #1")]
+			public bool StopGoesBreakEven
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "ProfitTarget1", Order = 13, GroupName = "One-Bar Breakout Trade #1")]
+			public int ProfitTarget1
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "Profit Target1 Stop_ticks", Order = 14, GroupName = "One-Bar Breakout Trade #1")]
+			public int StopGoesBreakEvenPlusMinusTicks1
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "ProfitTarget2", Order = 15, GroupName = "One-Bar Breakout Trade #1")]
+			public int ProfitTarget2
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "Profit Target2 Stop_ticks", Order = 16, GroupName = "One-Bar Breakout Trade #1")]
+			public int StopGoesBreakEvenPlusMinusTicks2
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "ProfitTarget3", Order = 17, GroupName = "One-Bar Breakout Trade #1")]
+			public int ProfitTarget3
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "Profit Target3 Stop_ticks", Order = 18, GroupName = "One-Bar Breakout Trade #1")]
+			public int StopGoesBreakEvenPlusMinusTicks3
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "AboveBelow_Ticks", Order = 3, GroupName = "One-Bar Breakout Trade #1")]
+			public int AboveBelowTicks
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Plot Trigger Lines", Order = 3, GroupName = "One-Bar Breakout Trade #1")]
+			public bool PlotTriggerLines
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "TriggerLineStroke", Order = 3, GroupName = "One-Bar Breakout Trade #1")]
+			public Stroke TriggerLineStroke
+			{ get; set; }
+
+			private TimeSpan priceBarTime = new TimeSpan(9, 29, 50);
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "PriceBarTime", Order = 4, GroupName = "One-Bar Breakout Trade #1")]
+			public TimeSpan PriceBarTime
+			{
+				get { return priceBarTime; }
+				set { priceBarTime = value; }
+			}
+
+			[Browsable(false)]
+			public string PriceBarTimeS
+			{
+				get { return priceBarTime.ToString(); }
+				set { priceBarTime = TimeSpan.Parse(value); }
+			}
+
+			// ===== Trade #2 =====
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Trade #2 Reversal", Order = 0, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public bool Trade2Reversal
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Trade #2 Stop", Order = 8, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public int Trade2Stop
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Trade #2 Contracts", Order = 9, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public int Trade2Contracts
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Trade #2 Target", Order = 10, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public int Trade2Target
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target Trade #2", Order = 11, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public bool ProfitTargetTrade2
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target1 Trade #2", Order = 12, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public int ProfitTarget1Trade2
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target1 Stop Ticks Trade #2", Order = 13, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public int ProfitTarget1StopTicksTrade2
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target2 Trade #2", Order = 14, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public int ProfitTarget2Trade2
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target2 Stop Ticks Trade #2", Order = 15, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public int ProfitTarget2StopTicksTrade2
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target3 Trade #2", Order = 16, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public int ProfitTarget3Trade2
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Profit Target3 Stop Ticks Trade #2", Order = 17, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public int ProfitTarget3StopTicksTrade2
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Market Order Reversal", Order = 18, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public bool MarketOrderReversal
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Stop Order Reversal", Order = 19, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public bool StopOrderReversal
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "StopOrderReversalEntry_ticks", Order = 20, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public int StopOrderReversalEntry_ticks
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "CancelStopOrderAfter_Bars", Order = 21, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public int CancelStopOrderAfter_Bars
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Cancel_Trade#2 if Trade#1 is protracted", Order = 22, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public bool CancelTrade2
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Cancel_Trade#2_Minutes", Order = 23, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public int CancelTrade2Minutes
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "AudioAlert", Order = 24, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public bool AudioAlert
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "StopLine", Order = 25, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public bool StopLine
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "StopLineStroke", Order = 26, GroupName = "One-Bar Breakout Trade #2 - Reversal")]
+			public Stroke StopLineStroke
+			{ get; set; }
+
+			#region Stats Panel
+
+			[NinjaScriptProperty]
+			[Display(Name = "Stats Font Size", Order = 1, GroupName = "Stats Panel")]
+			public int StatsFontSize
+			{ get; set; }
+
+			[XmlIgnore]
+			[Display(Name = "Stats Font Color", Order = 2, GroupName = "Stats Panel")]
+			public Brush StatsFontBrush
+			{
+				get { return statsFontBrush; }
+				set
+				{
+					statsFontBrush = value;
+					if (statsFontBrush != null)
+					{
+						if (statsFontBrush.IsFrozen)
+							statsFontBrush = statsFontBrush.Clone();
+						statsFontBrush.Freeze();
+					}
+				}
+			}
+
+			[Browsable(false)]
+			public string StatsFontBrushS
+			{
+				get { return Serialize.BrushToString(StatsFontBrush); }
+				set { StatsFontBrush = Serialize.StringToBrush(value); }
+			}
+
+			[XmlIgnore]
+			[Display(Name = "Stats Background Color", Order = 3, GroupName = "Stats Panel")]
+			public Brush StatsBackgroundBrush
+			{
+				get { return statsBackgroundBrush; }
+				set
+				{
+					statsBackgroundBrush = value;
+					if (statsBackgroundBrush != null)
+					{
+						if (statsBackgroundBrush.IsFrozen)
+							statsBackgroundBrush = statsBackgroundBrush.Clone();
+						statsBackgroundBrush.Freeze();
+					}
+				}
+			}
+
+			[Browsable(false)]
+			public string StatsBackgroundBrushS
+			{
+				get { return Serialize.BrushToString(StatsBackgroundBrush); }
+				set { StatsBackgroundBrush = Serialize.StringToBrush(value); }
+			}
+
+			#endregion
+
+			#region Seasonal Filters
+
+			[NinjaScriptProperty]
+			[Display(Name = "Use Holiday Filter", Order = 1, GroupName = "Seasonal Filters")]
+			public bool UseHolidayFilter
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "Block Thanksgiving Week", Order = 2, GroupName = "Seasonal Filters")]
+			public bool BlockThanksgivingWeek
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "Block Holiday/Rollover Period", Order = 3, GroupName = "Seasonal Filters")]
+			public bool BlockHolidayRollover
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "Holiday Block Start Month", Order = 4, GroupName = "Seasonal Filters")]
+			public int HolidayBlockStartMonth
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "Holiday Block Start Day", Order = 5, GroupName = "Seasonal Filters")]
+			public int HolidayBlockStartDay
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "Holiday Block End Month", Order = 6, GroupName = "Seasonal Filters")]
+			public int HolidayBlockEndMonth
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "Holiday Block End Day", Order = 7, GroupName = "Seasonal Filters")]
+			public int HolidayBlockEndDay
+			{ get; set; }
+
+			#endregion
+
+			#region Volume Filter
+
+			[NinjaScriptProperty]
+			[Display(Name = "Use Volume Filter", Order = 1, GroupName = "Volume Filter")]
+			public bool UseVolumeFilter
+			{ get; set; }
+
+			[NinjaScriptProperty]
+			[Display(Name = "Min Ticks Per Second", Order = 2, GroupName = "Volume Filter")]
+			public int MinTicksPerSecond
+			{ get; set; }
+
+			#endregion
+
+			#region Buttons
+
+			[XmlIgnore]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Close Font Color", Order = 4, GroupName = "Buttons")]
+			public System.Windows.Media.Brush CloseBrush
+			{
+				get { return closeBrush; }
+				set
+				{
+					closeBrush = value;
+					if (closeBrush != null)
+					{
+						if (closeBrush.IsFrozen)
+							closeBrush = closeBrush.Clone();
+						closeBrush.Freeze();
+					}
+				}
+			}
+
+			[Browsable(false)]
+			public string CloseBrushS
+			{
+				get { return Serialize.BrushToString(CloseBrush); }
+				set { CloseBrush = Serialize.StringToBrush(value); }
+			}
+
+			[XmlIgnore]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Pause Button Color", Order = 5, GroupName = "Buttons")]
+			public System.Windows.Media.Brush PauseBrush
+			{
+				get { return pauseBrush; }
+				set
+				{
+					pauseBrush = value;
+					if (pauseBrush != null)
+					{
+						if (pauseBrush.IsFrozen)
+							pauseBrush = pauseBrush.Clone();
+						pauseBrush.Freeze();
+					}
+				}
+			}
+
+			[Browsable(false)]
+			public string PauseBrushS
+			{
+				get { return Serialize.BrushToString(PauseBrush); }
+				set { PauseBrush = Serialize.StringToBrush(value); }
+			}
+
+			[XmlIgnore]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Target BE Button Color", Order = 6, GroupName = "Buttons")]
+			public System.Windows.Media.Brush TargetBEBrush
+			{
+				get { return targetBEBrush; }
+				set
+				{
+					targetBEBrush = value;
+					if (targetBEBrush != null)
+					{
+						if (targetBEBrush.IsFrozen)
+							targetBEBrush = targetBEBrush.Clone();
+						targetBEBrush.Freeze();
+					}
+				}
+			}
+
+			[Browsable(false)]
+			public string ChopBrushS
+			{
+				get { return Serialize.BrushToString(TargetBEBrush); }
+				set { TargetBEBrush = Serialize.StringToBrush(value); }
+			}
+
+			[XmlIgnore]
+			[Display(ResourceType = typeof(Custom.Resource), Name = "Stop BE Button Color", Order = 7, GroupName = "Buttons")]
+			public System.Windows.Media.Brush StopBEBrush
+			{
+				get { return stopBEBrush; }
+				set
+				{
+					stopBEBrush = value;
+					if (stopBEBrush != null)
+					{
+						if (stopBEBrush.IsFrozen)
+							stopBEBrush = stopBEBrush.Clone();
+						stopBEBrush.Freeze();
+					}
+				}
+			}
+
+			[Browsable(false)]
+			public string StopBEBrushS
+			{
+				get { return Serialize.BrushToString(StopBEBrush); }
+				set { StopBEBrush = Serialize.StringToBrush(value); }
+			}
+
+			#endregion
 
 		#endregion
-
-		#region Buttons
-
-		[XmlIgnore]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Close Font Color", Order = 4, GroupName = "Buttons")]
-		public System.Windows.Media.Brush CloseBrush
-		{
-			get { return closeBrush; }
-			set
-			{
-				closeBrush = value;
-				if (closeBrush != null)
-				{
-					if (closeBrush.IsFrozen)
-						closeBrush = closeBrush.Clone();
-					closeBrush.Freeze();
-				}
-			}
-		}
-
-		[Browsable(false)]
-		public string CloseBrushS
-		{
-			get { return Serialize.BrushToString(CloseBrush); }
-			set { CloseBrush = Serialize.StringToBrush(value); }
-		}
-
-		[XmlIgnore]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Pause Button Color", Order = 5, GroupName = "Buttons")]
-		public System.Windows.Media.Brush PauseBrush
-		{
-			get { return pauseBrush; }
-			set
-			{
-				pauseBrush = value;
-				if (pauseBrush != null)
-				{
-					if (pauseBrush.IsFrozen)
-						pauseBrush = pauseBrush.Clone();
-					pauseBrush.Freeze();
-				}
-			}
-		}
-
-		[Browsable(false)]
-		public string PauseBrushS
-		{
-			get { return Serialize.BrushToString(PauseBrush); }
-			set { PauseBrush = Serialize.StringToBrush(value); }
-		}
-
-		[XmlIgnore]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Target BE Button Color", Order = 6, GroupName = "Buttons")]
-		public System.Windows.Media.Brush TargetBEBrush
-		{
-			get { return targetBEBrush; }
-			set
-			{
-				targetBEBrush = value;
-				if (targetBEBrush != null)
-				{
-					if (targetBEBrush.IsFrozen)
-						targetBEBrush = targetBEBrush.Clone();
-					targetBEBrush.Freeze();
-				}
-			}
-		}
-
-		[Browsable(false)]
-		public string ChopBrushS
-		{
-			get { return Serialize.BrushToString(TargetBEBrush); }
-			set { TargetBEBrush = Serialize.StringToBrush(value); }
-		}
-
-		[XmlIgnore]
-		[Display(ResourceType = typeof(Custom.Resource), Name = "Stop BE Button Color", Order = 7, GroupName = "Buttons")]
-		public System.Windows.Media.Brush StopBEBrush
-		{
-			get { return stopBEBrush; }
-			set
-			{
-				stopBEBrush = value;
-				if (stopBEBrush != null)
-				{
-					if (stopBEBrush.IsFrozen)
-						stopBEBrush = stopBEBrush.Clone();
-					stopBEBrush.Freeze();
-				}
-			}
-		}
-
-		[Browsable(false)]
-		public string StopBEBrushS
-		{
-			get { return Serialize.BrushToString(StopBEBrush); }
-			set { StopBEBrush = Serialize.StringToBrush(value); }
-		}
-
-		#endregion
-
-		#endregion
-	}
+	} 
 }
